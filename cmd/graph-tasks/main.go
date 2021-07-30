@@ -15,10 +15,13 @@ import (
 func run() error {
 	ctx := context.Background()
 
-	conn, err := redis.Dial("tcp", "127.0.0.1:6379")
+	redisAddress := os.Getenv("REDIS_ADDRESS")
+	redisPassword := os.Getenv("REDIS_PASS")
+	conn, err := redis.Dial("tcp", redisAddress, redis.DialPassword(redisPassword))
 	if err != nil {
 		return err
 	}
+
 	defer conn.Close()
 
 	s := storage.New(conn)

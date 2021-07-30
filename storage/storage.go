@@ -52,25 +52,7 @@ func (s *Storage) Add(ctx context.Context, t tasks.Task) error {
 	return nil
 }
 
-func (s *Storage) Get(ctx context.Context, id string) (*tasks.Task, error) {
-	query := `MATCH (t:Task)
-	          WHERE t.taskID = $task_id
-	          RETURN t.taskID, t.author, t.comment, t.deadline`
-	queryResult, err := s.taskGraph().ParameterizedQuery(query, map[string]interface{}{
-		"task_id": id,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("graph.Query: %w", err)
-	}
-
-	if queryResult.Empty() {
-		return nil, fmt.Errorf("%w: there is no task with id=%s", err, id)
-	}
-
-	result := tasks.Task{}
-	queryResult.Next()
-	r := queryResult.Record()
-
+func taskFromRecord(r *rg.Record) (*tasks.Task, error) {
 	rawTaskID, ok := r.Get("t.taskID")
 	if !ok {
 		return nil, fmt.Errorf("r.Get(t.taskID): %w", tasks.ErrStorageFail)
@@ -104,22 +86,44 @@ func (s *Storage) Get(ctx context.Context, id string) (*tasks.Task, error) {
 	}
 
 	deadline, ok := rawDeadline.(int)
-	if err != nil {
+	if !ok {
 		return nil, fmt.Errorf("rawDeadline.(int): %w", tasks.ErrStorageFail)
 	}
 
-	result = tasks.Task{
+	return &tasks.Task{
 		ID: taskID,
 		TaskBuilder: tasks.TaskBuilder{
 			Author:   author,
 			Comment:  comment,
 			Deadline: time.Unix(int64(deadline), 0),
 		},
+	}, nil
+}
+
+func (s *Storage) Get(ctx context.Context, id string) (*tasks.Task, error) {
+	query := `MATCH (t:Task)
+	          WHERE t.taskID = $task_id
+	          RETURN t.taskID, t.author, t.comment, t.deadline`
+	queryResult, err := s.taskGraph().ParameterizedQuery(query, map[string]interface{}{
+		"task_id": id,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("graph.Query: %w", err)
 	}
 
-	return &result, nil
+	if queryResult.Empty() {
+		return nil, fmt.Errorf("%w: there is no task with id=%s", err, id)
+	}
 
-	return nil, nil
+	queryResult.Next()
+	r := queryResult.Record()
+
+	result, err := taskFromRecord(r)
+	if err != nil {
+		return nil, fmt.Errorf("taskFromRecord: %w", err)
+	}
+
+	return result, nil
 }
 
 func (s *Storage) Done(ctx context.Context, id string, r tasks.Report) error {
@@ -146,60 +150,39 @@ func (s *Storage) All(ctx context.Context) ([]tasks.Task, error) {
 
 	result := []tasks.Task{}
 	for queryResult.Next() {
-		r := queryResult.Record()
-
-		rawTaskID, ok := r.Get("t.taskID")
-		if !ok {
-			return nil, fmt.Errorf("r.Get(t.taskID): %w", tasks.ErrStorageFail)
-		}
-		taskID, ok := rawTaskID.(string)
-		if !ok {
-			return nil, fmt.Errorf("rawTaskID.(string): %w", tasks.ErrStorageFail)
-		}
-
-		rawAuthor, ok := r.Get("t.author")
-		if !ok {
-			return nil, fmt.Errorf("r.Get(t.author): %w", tasks.ErrStorageFail)
-		}
-		author, ok := rawAuthor.(string)
-		if !ok {
-			return nil, fmt.Errorf("rawAuthor.(string): %w", tasks.ErrStorageFail)
-		}
-
-		rawComment, ok := r.Get("t.comment")
-		if !ok {
-			return nil, fmt.Errorf("r.Get(t.comment): %w", tasks.ErrStorageFail)
-		}
-		comment, ok := rawComment.(string)
-		if !ok {
-			return nil, fmt.Errorf("rawComment.(string): %w", tasks.ErrStorageFail)
-		}
-
-		rawDeadline, ok := r.Get("t.deadline")
-		if !ok {
-			return nil, fmt.Errorf("r.Get(t.deadline): %w", tasks.ErrStorageFail)
-		}
-
-		deadline, ok := rawDeadline.(int)
+		parsed, err := taskFromRecord(queryResult.Record())
 		if err != nil {
-			return nil, fmt.Errorf("rawDeadline.(int): %w", tasks.ErrStorageFail)
+			return nil, fmt.Errorf("taskFromRecord: %w", err)
 		}
 
-		result = append(result, tasks.Task{
-			ID: taskID,
-			TaskBuilder: tasks.TaskBuilder{
-				Author:   author,
-				Comment:  comment,
-				Deadline: time.Unix(int64(deadline), 0),
-			},
-		})
+		result = append(result, *parsed)
 	}
 
 	return result, nil
 }
 
 func (s *Storage) OfAuthor(ctx context.Context, author string) ([]tasks.Task, error) {
-	return nil, nil
+	query := `MATCH (t:Task)
+	          WHERE t.author = $author_name
+	          RETURN t.taskID, t.author, t.comment, t.deadline`
+	queryResult, err := s.taskGraph().ParameterizedQuery(query, map[string]interface{}{
+		"author_name": author,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("graph.Query: %w", err)
+	}
+
+	result := []tasks.Task{}
+	for queryResult.Next() {
+		parsed, err := taskFromRecord(queryResult.Record())
+		if err != nil {
+			return nil, fmt.Errorf("taskFromRecord: %w", err)
+		}
+
+		result = append(result, *parsed)
+	}
+
+	return result, nil
 }
 
 func (s *Storage) DonyBy(ctx context.Context, doer string) ([]tasks.Task, error) {
